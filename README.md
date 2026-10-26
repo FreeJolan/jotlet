@@ -1,6 +1,6 @@
 # Jotlet
 
-[![CI](https://github.com/FreeJolan/jotlet/actions/workflows/ci.yml/badge.svg)](https://github.com/FreeJolan/jotlet/actions/workflows/ci.yml)
+[![CI](https://github.com/free-jolan-apps/jotlet/actions/workflows/ci.yml/badge.svg)](https://github.com/free-jolan-apps/jotlet/actions/workflows/ci.yml)
 
 macOS 本地便签。写几句话，贴一张截图，把需要参考的那张留在工作窗口旁边。
 
@@ -8,9 +8,9 @@ macOS 本地便签。写几句话，贴一张截图，把需要参考的那张�
 
 需要 macOS 14 或更新版本。发布包为 Universal 应用，同时包含 Apple Silicon 和 Intel 架构。
 
-从 [GitHub Releases](https://github.com/FreeJolan/jotlet/releases) 下载 ZIP，解压后将 `Jotlet.app` 放入应用程序目录。更新前正常退出旧版，再替换应用。请勿同时运行多个副本，它们会使用同一个资料库。
+从 [GitHub Releases](https://github.com/free-jolan-apps/jotlet/releases) 下载 ZIP，解压后将 `Jotlet.app` 放入应用程序目录。更新前正常退出旧版，再替换应用。请勿同时运行多个副本，它们会使用同一个资料库。
 
-当前内测包使用 ad-hoc 临时签名，尚未使用 Developer ID 签名或 Apple 公证。从网络下载后，macOS 可能拦截首次打开；请先确认来源和 `SHA256SUMS`，参阅 [Apple 的应用打开说明](https://support.apple.com/en-us/102445)。也可以按下方步骤从源码构建。
+从 0.2.4 起，Release 流程使用 Developer ID 签名并提交 Apple 公证，发布 ZIP 内的应用附带公证票据。`release.json` 记录实际签名和公证状态，`SHA256SUMS` 用于核对下载文件。日常开发与 CI 检查包仍使用 ad-hoc 签名。
 
 便签列表按需展开，打开便签后自动收起。切回应用会回到最近使用的便签；没有打开的便签时才显示列表。便签失焦后仍留在桌面上。
 
@@ -123,7 +123,7 @@ tart clone ghcr.io/cirruslabs/macos-tahoe-base:latest jotlet-test
 tart set jotlet-test --cpu 4 --memory 6144 --display 1440x900 --no-display-refit
 ```
 
-`scripts/test-tart.sh` 构建应用，在后台启动虚拟机，运行原生集成检查及跨应用窗口检查，并保存列表的活动、失焦截图，以及浅色、深色便签编辑器截图。窗口检查启动独立的参考应用，核对实际焦点和 WindowServer 中的窗口顺序。测试结束后关闭虚拟机，保留磁盘供下次复用。结果在 `.build/tart-runs/`，截图仍需查看后才能确认外观正确。可通过 `JOTLET_TART_VM` 指定另一台已创建且已关机的测试虚拟机。
+`scripts/test-tart.sh` 构建应用，在后台启动虚拟机，运行原生集成检查及跨应用窗口检查，并保存列表的活动、失焦截图，以及浅色、深色便签编辑器截图。窗口检查启动独立的参考应用，核对实际焦点和 WindowServer 中的窗口顺序。测试结束后关闭虚拟机，保留磁盘供下次复用。结果在 `.build/tart-runs/`，截图仍需查看后才能确认外观正确。检查下载的发布包时，先解压，再运行 `./scripts/test-tart.sh --app /path/to/Jotlet.app`，可直接测试该包而不重新构建。可通过 `JOTLET_TART_VM` 指定另一台已创建且已关机的测试虚拟机。
 
 虚拟机启动固定使用 `--no-graphics --no-clipboard --no-audio`，不打开主机窗口，不同步主机剪贴板。只共享应用构建产物、测试脚本和结果目录，个人便签不参与测试。`scripts/tart-guest-test.sh` 检查虚拟机共享目录，误在主机运行时会直接退出。首次镜像下载体积较大，之后无需重复下载。
 
@@ -146,11 +146,11 @@ GitHub 托管 runner 本身就是一次性虚拟机，原生编辑检查通过�
 发版时更新 `packaging/Info.plist` 的版本号和构建号、补充 `CHANGELOG.md`，合并到 `main`，再推送对应标签：
 
 ```sh
-git tag -a v0.2.3 -m "Jotlet v0.2.3"
-git push origin v0.2.3
+git tag -a v0.2.4 -m "Jotlet v0.2.4"
+git push origin v0.2.4
 ```
 
-`Release` 会重新执行完整检查，仅在通过后生成草稿 Release。检查草稿的说明和安装包后，在 GitHub 发布。已有标签失败时，可重新运行工作流；也支持手动选择已有标签。已公开的 Release 不会被流程覆盖。具体步骤和签名范围见 [发版说明](docs/RELEASING.md)。
+`Release` 会重新执行完整检查，再使用组织级凭据完成签名、公证、票据附加与重新打包，仅在全部验证通过后生成草稿 Release。检查草稿的说明和安装包后，在 GitHub 发布。已有标签失败时，可重新运行工作流；也支持手动选择已有标签。已公开的 Release 不会被流程覆盖。具体步骤见 [发版说明](docs/RELEASING.md)，其他应用复用同一套凭据与组件的方法见 [共享签名配置](docs/MACOS-SIGNING.md)。
 
 ## 图标素材
 

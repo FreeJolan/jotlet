@@ -62,7 +62,17 @@ def release_info(tag: str) -> dict:
             "prerelease": version.startswith("0.") or "-" in validated_tag}
 
 
-def inspect_app(app: Path, info: dict) -> None:
+def signature_info(text: str) -> dict:
+    if "Signature=adhoc" in text:
+        return {"signing": "ad-hoc", "team_id": None}
+    team = re.search(r"^TeamIdentifier=([A-Z0-9]{10})$", text, re.M)
+    if (not team or "Authority=Developer ID Application:" not in text
+            or "(runtime)" not in text or "Timestamp=" not in text):
+        raise ValueError("Developer ID signatures require a Team ID, hardened runtime and secure timestamp.")
+    return {"signing": "developer-id", "team_id": team.group(1)}
+
+
+def inspect_app(app: Path, info: dict) -> dict:
     with (app / "Contents/Info.plist").open("rb") as stream:
         bundle = plistlib.load(stream)
     expected = {"CFBundleIdentifier": "app.jotlet.mac", "CFBundleExecutable": "Jotlet",
@@ -77,16 +87,42 @@ def inspect_app(app: Path, info: dict) -> None:
     if set(run("lipo", "-archs", str(binary)).split()) != {"arm64", "x86_64"}:
         raise ValueError("Release binaries must contain both arm64 and x86_64.")
     subprocess.run(["codesign", "--verify", "--deep", "--strict", "--all-architectures", str(app)], check=True)
+    signatures = []
+    for arch in ["arm64", "x86_64"]:
+        displayed = subprocess.run(["codesign", "--display", "--verbose=4", "--architecture", arch, str(app)],
+                                   capture_output=True, text=True, check=True)
+        signatures.append(signature_info(displayed.stderr))
+    if signatures[0] != signatures[1]:
+        raise ValueError("Both architectures must use the same signing identity.")
+    signing = signatures[0]
+    signing["notarized"] = False
+    if signing["signing"] == "developer-id":
+        ticket = subprocess.run(["xcrun", "stapler", "validate", str(app)], capture_output=True, text=True)
+        signing["notarized"] = ticket.returncode == 0
+        if signing["notarized"]:
+            subprocess.run(["spctl", "--assess", "--type", "execute", str(app)], check=True)
+    for key, value in signing.items():
+        if key in info and info[key] != value:
+            raise ValueError(f"Actual {key} differs from release metadata.")
+    return signing
 
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def package(tag: str) -> None:
+def require_distribution(signing: dict, expected_team: str) -> None:
+    if (not re.fullmatch(r"[A-Z0-9]{10}", expected_team)
+            or signing != {"signing": "developer-id", "team_id": expected_team, "notarized": True}):
+        raise ValueError("Distribution requires notarization and a Developer ID signature from the expected team.")
+
+
+def package(tag: str, require_notarized: bool = False, expected_team: str = "") -> None:
     info = release_info(tag)
     app = ROOT / "dist/Jotlet.app"
-    inspect_app(app, info)
+    signing = inspect_app(app, info)
+    if require_notarized:
+        require_distribution(signing, expected_team)
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
     OUTPUT.mkdir(parents=True)
@@ -96,23 +132,24 @@ def package(tag: str) -> None:
     metadata.update({"schema_version": 1, "architectures": ["arm64", "x86_64"],
                      "source_commit": run("git", "rev-parse", "HEAD"),
                      "source_dirty": bool(run("git", "status", "--porcelain")),
-                     "archive": archive, "archive_sha256": digest(OUTPUT / archive),
-                     "signing": "ad-hoc", "notarized": False})
+                     "archive": archive, "archive_sha256": digest(OUTPUT / archive), **signing})
     (OUTPUT / "release.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
     (OUTPUT / "SHA256SUMS").write_text("".join(f"{digest(OUTPUT / name)}  {name}\n" for name in [archive, "release.json"]))
+    signing_note = ("本包已使用 Developer ID 签名并通过 Apple 公证，应用内附带公证票据。\n\n"
+                    if signing["notarized"] else
+                    "本包尚未完成 Developer ID 签名和 Apple 公证，仅供开发验证。"
+                    "请参阅 [Apple 的应用打开说明](https://support.apple.com/en-us/102445)。\n\n")
     notes = (f"{info['notes']}\n\n"
              f"### 下载与安装\n\n"
              f"支持 macOS {info['minimum_macos']} 及以上，下载 `{archive}`，解压后将 `Jotlet.app` 放入应用程序目录。"
              "同一个包包含 Apple Silicon 和 Intel 两种架构。更新前请正常退出旧版，已有便签保存在用户资料库中。\n\n"
-             "本包使用 ad-hoc 临时签名，**尚未使用 Developer ID 签名或 Apple 公证**。"
-             "从网络下载后，Gatekeeper 可能拦截首次打开；请先确认来源与校验和，"
-             "并参阅 [Apple 的应用打开说明](https://support.apple.com/en-us/102445)。\n\n"
+             f"{signing_note}"
              "`SHA256SUMS` 可用于核对下载文件，`release.json` 记录版本、构建号、架构和源码提交。\n")
     (OUTPUT / "release-notes.md").write_text(notes)
     print(f"Packaged {OUTPUT / archive}")
 
 
-def verify() -> None:
+def verify(require_notarized: bool = False, expected_team: str = "") -> None:
     info = json.loads((OUTPUT / "release.json").read_text())
     validate_tag(info["version"], info["tag"])
     expected_name = f"Jotlet-{info['tag']}-universal.zip"
@@ -123,7 +160,9 @@ def verify() -> None:
         raise ValueError("SHA256SUMS does not match the release files.")
     with tempfile.TemporaryDirectory(prefix="jotlet-release-check-") as folder:
         subprocess.run(["ditto", "-x", "-k", str(OUTPUT / expected_name), folder], check=True)
-        inspect_app(Path(folder) / "Jotlet.app", info)
+        signing = inspect_app(Path(folder) / "Jotlet.app", info)
+        if require_notarized:
+            require_distribution(signing, expected_team)
     print("Verified archive extraction, metadata, both architectures, permissions and code signature.")
 
 
@@ -131,13 +170,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["check", "package", "verify"])
     parser.add_argument("--tag", default="")
+    parser.add_argument("--require-notarized", action="store_true")
+    parser.add_argument("--team-id", default="")
     args = parser.parse_args()
     if args.command == "check":
         print(json.dumps(release_info(args.tag), ensure_ascii=False, indent=2))
     elif args.command == "package":
-        package(args.tag)
+        package(args.tag, args.require_notarized, args.team_id)
     else:
-        verify()
+        verify(args.require_notarized, args.team_id)
 
 
 if __name__ == "__main__":
