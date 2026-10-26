@@ -1,0 +1,13 @@
+.build/
+dist/
+.DS_Store
+.swiftpm/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+*.p12
+*.p8
+*.mobileprovision
+*.jotletbackup
