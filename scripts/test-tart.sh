@@ -2,6 +2,13 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 
+task_app=""
+if (( $# == 2 )) && [[ "$1" == --app ]]; then
+    task_app="${2:A}"
+elif (( $# > 0 )); then
+    print -u2 "Usage: $0 [--app /path/to/Jotlet.app]"
+    exit 2
+fi
 task_vm="${JOTLET_TART_VM:-jotlet-test}"
 if ! command -v tart >/dev/null; then
     print -u2 "Install Tart first: brew install cirruslabs/cli/tart"
@@ -17,13 +24,17 @@ if [[ "$task_running" != False ]]; then
     exit 2
 fi
 
-./scripts/build.sh
+if [[ -z "$task_app" ]]; then
+    ./scripts/build.sh
+    task_app="$PWD/dist/Jotlet.app"
+fi
+codesign --verify --deep --strict --all-architectures "$task_app"
 mkdir -p .build/tart-runs
 task_run="$(mktemp -d "$PWD/.build/tart-runs/run.XXXXXX")"
 task_input="$task_run/input"
 task_output="$task_run/artifacts"
 mkdir -p "$task_input" "$task_output"
-ditto dist/Jotlet.app "$task_input/Jotlet.app"
+ditto "$task_app" "$task_input/Jotlet.app"
 cp scripts/tart-guest-test.sh "$task_input/guest-test.sh"
 task_reference="$task_input/WindowReference.app/Contents"
 mkdir -p "$task_reference/MacOS"

@@ -1,6 +1,6 @@
 # 发版说明
 
-目前输出 Universal ZIP，支持 macOS 14 及以上，包含 arm64 和 x86_64 两种架构。打包沿用本地内测的 ad-hoc 签名，尚未接入 Developer ID 和 Apple 公证，不需要配置 Apple 账号或证书即可运行。
+目前输出 Universal ZIP，支持 macOS 14 及以上，包含 arm64 和 x86_64 两种架构。开发和 PR 检查包使用 ad-hoc 签名；Release 包必须完成 Developer ID 签名、Apple 公证与票据附加。签名凭据统一从 free-jolan-apps 的组织级 Secrets 读取。
 
 ## 提交与检查
 
@@ -28,13 +28,13 @@ git push origin v0.2.4
 
 ## 发布草稿
 
-推送标签会触发 `Release`。它会重新检查两种架构，再打包、解压验证，最后生成草稿，包含：
+推送标签会触发 `Release`。它会重新检查两种架构，并验证构建产物与标签提交一致。随后在独立 macOS runner 的临时钥匙串中导入证书，启用 hardened runtime 和 secure timestamp 签名，提交 Apple 公证、附加票据，再打包并解压验证。公证、Team ID、签名或 Gatekeeper 校验失败时，流程停止。通过后生成草稿，包含：
 
 - `Jotlet-v版本号-universal.zip`：应用包。
 - `SHA256SUMS`：ZIP 和元数据的 SHA-256。
 - `release.json`：版本、构建号、最低系统、架构、源码提交和签名状态。
 
-更新记录自动写入草稿说明，附上安装方法和未公证的说明。核对版本与说明，下载并验证安装包后，点击 GitHub 的 Publish release。草稿在发布前仅仓库维护者可见。
+更新记录自动写入草稿说明，附上安装方法和实际签名状态。核对版本与说明，下载并验证安装包后，点击 GitHub 的 Publish release。草稿在发布前仅仓库维护者可见。
 
 ```sh
 shasum -a 256 -c SHA256SUMS
@@ -64,6 +64,16 @@ python3 scripts/release.py verify
 
 ## Developer ID 与公证
 
-目前仓库没有 Apple 开发者证书或公证凭据。ad-hoc 校验能检查包是否完整，不能证明开发者身份，也不能替代 Gatekeeper 公证。
+配置与复用方式见 [共享签名配置](MACOS-SIGNING.md)。组织的六项 `APPLE_*` Secrets 只传入 Release 中的签名步骤，PR 和普通 CI 不引用这些凭据。签名脚本拒绝在开发者主机和 self-hosted runner 运行，执行结束后删除临时证书文件和钥匙串，并恢复原钥匙串搜索路径。
 
-后续如需直接向普通用户分发，可接入 Developer ID Application 签名、hardened runtime、Apple 公证和 stapling，再把 `release.json` 的签名状态改为实际结果。证书及凭据应存入 GitHub Actions secrets，不能提交到仓库。当前流程不会绕过系统安全检查。
+`release.json` 中的 `signing`、`team_id`、`notarized` 从两种架构的实际签名和附加票据读取。Release 使用 `--require-notarized --team-id`，拒绝临时签名、不同 Team ID 或缺少公证票据的包。最终 ZIP 包含附加票据后的应用，校验和在重新打包后计算。
+
+公证最多等待 20 分钟，超时后 Apple 仍可能继续处理；日志会输出提交 ID。认证或证书错误需在组织级 Secrets 中修正，之后新建工作流运行。旧版本标签不包含新签名流程时，应创建新版本，不移动标签。
+
+下载草稿附件后，还应检查实际运行行为：
+
+```sh
+./scripts/test-tart.sh --app /path/to/Jotlet.app
+```
+
+此命令直接将下载并解压的应用送入 Tart，验证签名后的运行状态，保留用户主机的窗口、剪贴板和便签。

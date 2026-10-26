@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag, for example v0.2.3
+        description: Existing tag, for example v0.2.4
         type: string
         required: true
 
@@ -23,9 +23,63 @@ jobs:
     with:
       tag: ${{ inputs.tag || github.ref_name }}
 
+  sign:
+    name: Developer ID and notarization
+    needs: checks
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: jotlet-package
+          path: dist/release
+      - name: Validate source and extract checked app
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 scripts/release.py check --tag "$RELEASE_TAG"
+          git merge-base --is-ancestor HEAD origin/main
+          python3 scripts/release.py verify
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          metadata = json.loads(Path('dist/release/release.json').read_text())
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if metadata['tag'] != os.environ['RELEASE_TAG'] or metadata['source_commit'] != commit or metadata['source_dirty']:
+              raise SystemExit('Artifact does not match the clean tagged source.')
+          subprocess.run(['ditto', '-x', '-k', str(Path('dist/release') / metadata['archive']), 'dist'], check=True)
+          PY
+      - uses: ./.github/actions/sign-notarize
+        with:
+          app: dist/Jotlet.app
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          apple-id: ${{ secrets.APPLE_ID }}
+          apple-password: ${{ secrets.APPLE_PASSWORD }}
+      - name: Repackage stapled app and verify distribution
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          python3 scripts/release.py package --tag "$RELEASE_TAG" --require-notarized --team-id "$APPLE_TEAM_ID"
+          python3 scripts/release.py verify --require-notarized --team-id "$APPLE_TEAM_ID"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jotlet-release
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+
   draft:
     name: Draft release
-    needs: checks
+    needs: sign
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -33,7 +87,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: jotlet-package
+          name: jotlet-release
           path: release
       - name: Verify checksums and create draft
         working-directory: release
@@ -50,6 +104,8 @@ jobs:
           tag = os.environ['RELEASE_TAG']
           if metadata['tag'] != tag:
               raise SystemExit('Artifact tag differs from requested release tag.')
+          if metadata['signing'] != 'developer-id' or metadata['notarized'] is not True:
+              raise SystemExit('Only signed and notarized packages may be released.')
           repo = os.environ['GITHUB_REPOSITORY']
           existing = subprocess.run(['gh', 'release', 'view', tag, '--repo', repo, '--json', 'isDraft'], capture_output=True, text=True)
           if existing.returncode == 0:

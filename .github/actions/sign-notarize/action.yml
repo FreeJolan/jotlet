@@ -1,0 +1,47 @@
+name: Sign and notarize a macOS app
+description: Use an organization's Apple credentials on a temporary GitHub-hosted macOS runner
+inputs:
+  app:
+    description: Path to an assembled .app; nested code must already be signed
+    required: true
+  certificate:
+    description: Base64-encoded Developer ID Application PKCS12 identity
+    required: true
+  certificate-password:
+    description: PKCS12 export password
+    required: true
+  signing-identity:
+    description: Developer ID Application identity name
+    required: true
+  team-id:
+    description: Expected Apple Developer Team ID
+    required: true
+  apple-id:
+    description: Apple account used for notarization
+    required: true
+  apple-password:
+    description: App-specific password for notarization
+    required: true
+  entitlements:
+    description: Optional release entitlements plist for the main app
+    default: ''
+outputs:
+  submission-id:
+    description: Apple notarization submission ID
+    value: ${{ steps.sign.outputs.submission-id }}
+runs:
+  using: composite
+  steps:
+    - id: sign
+      shell: bash
+      env:
+        SIGNING_ACTION_PATH: ${{ github.action_path }}
+        SIGNING_APP: ${{ inputs.app }}
+        SIGNING_ENTITLEMENTS: ${{ inputs.entitlements }}
+        APPLE_CERTIFICATE: ${{ inputs.certificate }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ inputs.certificate-password }}
+        APPLE_SIGNING_IDENTITY: ${{ inputs.signing-identity }}
+        APPLE_TEAM_ID: ${{ inputs.team-id }}
+        APPLE_ID: ${{ inputs.apple-id }}
+        APPLE_PASSWORD: ${{ inputs.apple-password }}
+      run: python3 "$SIGNING_ACTION_PATH/sign.py"

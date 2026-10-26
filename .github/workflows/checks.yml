@@ -39,7 +39,10 @@ jobs:
       - name: Release tooling tests
         run: python3 -m unittest discover -s Tests/ReleaseToolsTests -v
       - name: Swift unit tests
-        run: swift test --xunit-output .build/test-results.xml
+        run: |
+          mkdir -p .build/ci-logs
+          set -o pipefail
+          swift test 2>&1 | tee .build/ci-logs/unit.log
       - name: Build app
         run: ./scripts/build.sh
       - name: Native editor checks in the runner VM
@@ -50,7 +53,7 @@ jobs:
         with:
           name: test-reports-${{ matrix.arch }}
           path: |
-            .build/test-results.xml
+            .build/ci-logs/unit.log
             .build/ci-logs/native.log
           include-hidden-files: true
           retention-days: 14
