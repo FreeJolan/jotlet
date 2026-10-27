@@ -66,7 +66,7 @@ python3 scripts/release.py verify
 
 配置与复用方式见 [共享签名配置](MACOS-SIGNING.md)。组织的六项 `APPLE_*` Secrets 只传入 Release 中的签名步骤，PR 和普通 CI 不引用这些凭据。签名脚本拒绝在开发者主机和 self-hosted runner 运行，执行结束后删除临时证书文件和钥匙串，并恢复原钥匙串搜索路径。
 
-`release.json` 中的 `signing`、`team_id`、`notarized` 从两种架构的实际签名和附加票据读取。Release 使用 `--require-notarized --team-id`，拒绝临时签名、不同 Team ID 或缺少公证票据的包。最终 ZIP 包含附加票据后的应用，校验和在重新打包后计算。
+`release.json` 中的 `signing`、`team_id`、`notarized` 从两种架构的实际签名和附加票据读取。公证票据校验失败时会输出 stapler 的原始诊断，并进行有限重试，持续失败仍拒绝发布。Release 使用 `--require-notarized --team-id`，拒绝临时签名、不同 Team ID 或缺少公证票据的包。最终 ZIP 包含附加票据后的应用，校验和在重新打包后计算。
 
 公证最多等待 20 分钟，超时后 Apple 仍可能继续处理；日志会输出提交 ID。认证或证书错误需在组织级 Secrets 中修正，之后新建工作流运行。旧版本标签不包含新签名流程时，应创建新版本，不移动标签。
 
@@ -77,3 +77,9 @@ python3 scripts/release.py verify
 ```
 
 此命令直接将下载并解压的应用送入 Tart，验证签名后的运行状态，保留用户主机的窗口、剪贴板和便签。
+
+## 应用源码与发版工具版本
+
+标签固定应用源码，不移动已有标签。手动 Release 使用所选工作流修订中的发版工具，在独立目录检出；应用仍从输入标签构建。`release.json` 分别记录 `source_commit` 与 `release_tools_commit`，因此可以修复打包流程后对同一应用标签重试，同时保留两者的来源。
+
+`notarized-app` artifact 保存签名组件已验证的应用，保留 7 天，用于在 Tart 检查运行状态。它不包含钥匙串或凭据；最终下载包仍以通过完整校验的草稿 Release 附件为准。

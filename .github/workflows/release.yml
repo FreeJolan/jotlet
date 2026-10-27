@@ -34,6 +34,12 @@ jobs:
           ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Checkout release tools from this workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .build/release-tools
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: jotlet-package
@@ -54,7 +60,7 @@ jobs:
               raise SystemExit('Artifact does not match the clean tagged source.')
           subprocess.run(['ditto', '-x', '-k', str(Path('dist/release') / metadata['archive']), 'dist'], check=True)
           PY
-      - uses: ./.github/actions/sign-notarize
+      - uses: ./.build/release-tools/.github/actions/sign-notarize
         with:
           app: dist/Jotlet.app
           certificate: ${{ secrets.APPLE_CERTIFICATE }}
@@ -63,13 +69,21 @@ jobs:
           team-id: ${{ secrets.APPLE_TEAM_ID }}
           apple-id: ${{ secrets.APPLE_ID }}
           apple-password: ${{ secrets.APPLE_PASSWORD }}
+      - name: Save notarized app for isolated runtime checks
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Jotlet.app .build/notarized-app.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notarized-app
+          path: .build/notarized-app.zip
+          retention-days: 7
+          if-no-files-found: error
       - name: Repackage stapled app and verify distribution
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          python3 scripts/release.py package --tag "$RELEASE_TAG" --require-notarized --team-id "$APPLE_TEAM_ID"
-          python3 scripts/release.py verify --require-notarized --team-id "$APPLE_TEAM_ID"
+          python3 .build/release-tools/scripts/release.py package --root "$GITHUB_WORKSPACE" --tag "$RELEASE_TAG" --require-notarized --team-id "$APPLE_TEAM_ID"
+          python3 .build/release-tools/scripts/release.py verify --root "$GITHUB_WORKSPACE" --require-notarized --team-id "$APPLE_TEAM_ID"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: jotlet-release

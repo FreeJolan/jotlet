@@ -12,14 +12,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
+TOOL_ROOT = ROOT
 OUTPUT = ROOT / "dist/release"
 VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 
 
 def run(*args: str) -> str:
-    return subprocess.check_output(args, text=True).strip()
+    return subprocess.check_output(args, text=True, cwd=ROOT).strip()
 
 
 def validate_tag(version: str, tag: str) -> str:
@@ -72,6 +74,17 @@ def signature_info(text: str) -> dict:
     return {"signing": "developer-id", "team_id": team.group(1)}
 
 
+def validate_ticket(app: Path) -> bool:
+    for attempt in range(3):
+        result = subprocess.run(["xcrun", "stapler", "validate", str(app)], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    print(f"Stapler validation failed (exit {result.returncode}):\n{result.stdout}{result.stderr}")
+    return False
+
+
 def inspect_app(app: Path, info: dict) -> dict:
     with (app / "Contents/Info.plist").open("rb") as stream:
         bundle = plistlib.load(stream)
@@ -97,8 +110,7 @@ def inspect_app(app: Path, info: dict) -> dict:
     signing = signatures[0]
     signing["notarized"] = False
     if signing["signing"] == "developer-id":
-        ticket = subprocess.run(["xcrun", "stapler", "validate", str(app)], capture_output=True, text=True)
-        signing["notarized"] = ticket.returncode == 0
+        signing["notarized"] = validate_ticket(app)
         if signing["notarized"]:
             subprocess.run(["spctl", "--assess", "--type", "execute", str(app)], check=True)
     for key, value in signing.items():
@@ -112,9 +124,14 @@ def digest(path: Path) -> str:
 
 
 def require_distribution(signing: dict, expected_team: str) -> None:
-    if (not re.fullmatch(r"[A-Z0-9]{10}", expected_team)
-            or signing != {"signing": "developer-id", "team_id": expected_team, "notarized": True}):
-        raise ValueError("Distribution requires notarization and a Developer ID signature from the expected team.")
+    if not re.fullmatch(r"[A-Z0-9]{10}", expected_team):
+        raise ValueError("Distribution requires a ten-character expected Team ID.")
+    if signing.get("signing") != "developer-id":
+        raise ValueError("Distribution requires a Developer ID Application signature.")
+    if signing.get("team_id") != expected_team:
+        raise ValueError("The actual signature does not belong to the expected team.")
+    if signing.get("notarized") is not True:
+        raise ValueError("Distribution requires a valid stapled notarization ticket.")
 
 
 def package(tag: str, require_notarized: bool = False, expected_team: str = "") -> None:
@@ -131,6 +148,7 @@ def package(tag: str, require_notarized: bool = False, expected_team: str = "") 
     metadata = {key: value for key, value in info.items() if key != "notes"}
     metadata.update({"schema_version": 1, "architectures": ["arm64", "x86_64"],
                      "source_commit": run("git", "rev-parse", "HEAD"),
+                     "release_tools_commit": run("git", "-C", str(TOOL_ROOT), "rev-parse", "HEAD"),
                      "source_dirty": bool(run("git", "status", "--porcelain")),
                      "archive": archive, "archive_sha256": digest(OUTPUT / archive), **signing})
     (OUTPUT / "release.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
@@ -167,12 +185,16 @@ def verify(require_notarized: bool = False, expected_team: str = "") -> None:
 
 
 def main() -> None:
+    global ROOT, OUTPUT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["check", "package", "verify"])
     parser.add_argument("--tag", default="")
     parser.add_argument("--require-notarized", action="store_true")
     parser.add_argument("--team-id", default="")
+    parser.add_argument("--root", type=Path, default=ROOT, help="App source checkout, if separate from release tools")
     args = parser.parse_args()
+    ROOT = args.root.resolve()
+    OUTPUT = ROOT / "dist/release"
     if args.command == "check":
         print(json.dumps(release_info(args.tag), ensure_ascii=False, indent=2))
     elif args.command == "package":

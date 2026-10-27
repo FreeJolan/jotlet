@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+from subprocess import CompletedProcess
 
 spec = importlib.util.spec_from_file_location("release", Path(__file__).resolve().parents[2] / "scripts/release.py")
 release = importlib.util.module_from_spec(spec)
@@ -8,6 +10,16 @@ spec.loader.exec_module(release)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_ticket_verification_retries_transient_failure_without_accepting_missing_ticket(self):
+        failed = CompletedProcess([], 65, stdout="Ticket lookup failed", stderr="")
+        accepted = CompletedProcess([], 0, stdout="The validate action worked!", stderr="")
+        with patch.object(release.subprocess, 'run', side_effect=[failed, accepted]) as command, patch.object(release.time, 'sleep'):
+            self.assertTrue(release.validate_ticket(Path('/tmp/Example.app')))
+            self.assertEqual(command.call_count, 2)
+        with patch.object(release.subprocess, 'run', return_value=failed) as command, patch.object(release.time, 'sleep'), patch('builtins.print'):
+            self.assertFalse(release.validate_ticket(Path('/tmp/Example.app')))
+            self.assertEqual(command.call_count, 3)
+
     def test_distribution_requires_actual_signature_ticket_and_expected_team(self):
         signed = {"signing": "developer-id", "team_id": "N8384H66R9", "notarized": True}
         release.require_distribution(signed, "N8384H66R9")
